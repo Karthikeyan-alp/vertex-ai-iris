@@ -39,7 +39,7 @@ def train_automl(project: str, location: str, dataset_resource_name: str, target
     job = aiplatform.AutoMLTabularTrainingJob(
         display_name=model_display_name + '-job',
         optimization_prediction_type='classification',
-        optimization_objective='maximize-log-likelihood'
+        optimization_objective='maximize-au-roc'
     )
 
     model = job.run(
