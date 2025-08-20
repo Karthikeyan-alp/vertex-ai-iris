@@ -1,0 +1,11 @@
+steps:
+  - name: 'python:3.10'
+    entrypoint: 'bash'
+    args:
+      - -c
+      - |
+        pip install --upgrade pip
+        pip install -r requirements.txt
+        python data_prep.py
+        python pipeline.py
+timeout: '1200s'
