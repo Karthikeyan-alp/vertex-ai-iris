@@ -226,61 +226,87 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
-# -------------------- Config --------------------
 PROJECT_ID = os.getenv('PROJECT_ID')
 REGION = os.getenv('REGION', 'us-central1')
 BUCKET_NAME = os.getenv('BUCKET_NAME')
 PIPELINE_ROOT = os.getenv('PIPELINE_ROOT', f'gs://{BUCKET_NAME}/pipeline_root')
-GCS_CSV = os.getenv('DATA_PATH', 'data/iris.csv')
-GCS_CSV_URI = f'gs://{BUCKET_NAME}/{GCS_CSV}'
 
+# -------------------- Dataset Setup --------------------
+# We'll use Titanic dataset (~1309 rows)
+# Public CSV link
+TITANIC_URL = "https://raw.githubusercontent.com/datasciencedojo/datasets/master/titanic.csv"
+
+# Download Titanic dataset locally
+import pandas as pd
+df = pd.read_csv(TITANIC_URL)
+print("Titanic dataset shape:", df.shape)
+
+# Save locally
+local_file = "titanic.csv"
+df.to_csv(local_file, index=False)
+
+# Upload to GCS
+from google.cloud import storage
+client = storage.Client()
+bucket = client.bucket(BUCKET_NAME)
+gcs_file = "data/titanic.csv"
+blob = bucket.blob(gcs_file)
+blob.upload_from_filename(local_file)
+
+print(f"Uploaded Titanic dataset to gs://{BUCKET_NAME}/{gcs_file}")
+
+# Update pipeline dataset path
+GCS_CSV = gcs_file
+GCS_CSV_URI = f"gs://{BUCKET_NAME}/{GCS_CSV}"
+
+# -------------------- Pipeline Imports --------------------
 from kfp import dsl, compiler
 from kfp.dsl import component
 
 BASE_IMAGE = 'python:3.10'
-PKGS = ['google-cloud-aiplatform==1.56.0', 'scikit-learn', 'pandas', 'joblib']
+PKGS = ['google-cloud-aiplatform==1.56.0']
+
+# -------------------- Dataset Component --------------------
+@component(base_image=BASE_IMAGE, packages_to_install=PKGS)
+def ensure_tabular_dataset(project: str, location: str, display_name: str, gcs_uri: str) -> str:
+    from google.cloud import aiplatform
+    aiplatform.init(project=project, location=location)
+    for d in aiplatform.TabularDataset.list():
+        if d.display_name == display_name:
+            print('Reusing dataset', d.resource_name)
+            return d.resource_name
+    ds = aiplatform.TabularDataset.create(display_name=display_name, gcs_source=[gcs_uri])
+    print('Created dataset', ds.resource_name)
+    return ds.resource_name
 
 # -------------------- Training Component --------------------
 @component(base_image=BASE_IMAGE, packages_to_install=PKGS)
-def train_sklearn_model(project: str, location: str, gcs_uri: str, target_col: str,
-                        model_display_name: str, model_output_dir: str = "/tmp/model") -> str:
-    import pandas as pd
-    import joblib
+def train_automl(project: str, location: str, dataset_resource_name: str, target_col: str,
+                 model_display_name: str, budget_mnh: int) -> str:
     from google.cloud import aiplatform
-    from sklearn.model_selection import train_test_split
-    from sklearn.ensemble import RandomForestClassifier
-    from sklearn.metrics import accuracy_score
-    import os
-
-    # Load dataset from GCS
-    df = pd.read_csv(gcs_uri)
-    X = df.drop(columns=[target_col])
-    y = df[target_col]
-
-    # Train/test split
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-    # Train sklearn model
-    clf = RandomForestClassifier(n_estimators=100, random_state=42)
-    clf.fit(X_train, y_train)
-
-    # Evaluate
-    preds = clf.predict(X_test)
-    acc = accuracy_score(y_test, preds)
-    print("Accuracy:", acc)
-
-    # Save model
-    os.makedirs(model_output_dir, exist_ok=True)
-    model_path = os.path.join(model_output_dir, "model.joblib")
-    joblib.dump(clf, model_path)
-
-    # Upload to Vertex AI Model Registry
     aiplatform.init(project=project, location=location)
-    model = aiplatform.Model.upload(
-        display_name=model_display_name,
-        artifact_uri=model_output_dir,
-        serving_container_image_uri="us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-3:latest",
+    ds = aiplatform.TabularDataset(dataset_resource_name)
+
+    job = aiplatform.AutoMLTabularTrainingJob(
+        display_name=model_display_name + '-job',
+        optimization_prediction_type='classification',
+        optimization_objective='minimize-log-loss'
     )
+
+    model = job.run(
+        dataset=ds,
+        target_column=target_col,
+        model_display_name=model_display_name,
+        budget_milli_node_hours=budget_mnh,
+        sync=True
+    )
+
+    try:
+        metrics = model.evaluate()
+        print('Evaluation metrics:', metrics)
+    except Exception as e:
+        print('Eval skipped:', e)
+
     return model.resource_name
 
 # -------------------- Deployment Component --------------------
@@ -300,32 +326,30 @@ def deploy_model(project: str, location: str, model_resource_name: str, endpoint
     return endpoint.resource_name
 
 # -------------------- Pipeline --------------------
-@dsl.pipeline(name='iris-custom-pipeline')
-def iris_pipeline(project: str = PROJECT_ID, location: str = REGION,
-                  gcs_csv_uri: str = GCS_CSV_URI, target_column: str = 'target',
-                  model_display_name: str = 'iris-sklearn-model',
-                  endpoint_display_name: str = 'iris-endpoint'):
+@dsl.pipeline(name='titanic-automl-pipeline')
+def titanic_pipeline(project: str = PROJECT_ID, location: str = REGION,
+                     dataset_display_name: str = 'titanic-dataset', gcs_csv_uri: str = GCS_CSV_URI,
+                     target_column: str = 'Survived', model_display_name: str = 'titanic-automl-model',
+                     endpoint_display_name: str = 'titanic-endpoint', budget_mnh: int = 1000):
 
-    model = train_sklearn_model(project=project, location=location,
-                                gcs_uri=gcs_csv_uri, target_col=target_column,
-                                model_display_name=model_display_name)
-
+    ds = ensure_tabular_dataset(project=project, location=location,
+                                display_name=dataset_display_name, gcs_uri=gcs_csv_uri)
+    model = train_automl(project=project, location=location,
+                         dataset_resource_name=ds.output, target_col=target_column,
+                         model_display_name=model_display_name, budget_mnh=budget_mnh)
     _ = deploy_model(project=project, location=location,
-                     model_resource_name=model.output,
-                     endpoint_display_name=endpoint_display_name)
+                     model_resource_name=model.output, endpoint_display_name=endpoint_display_name)
 
 # -------------------- Main --------------------
 if __name__ == '__main__':
-    compiler.Compiler().compile(pipeline_func=iris_pipeline, package_path='iris_pipeline.json')
-    print('Compiled pipeline to iris_pipeline.json')
+    compiler.Compiler().compile(pipeline_func=titanic_pipeline, package_path='titanic_pipeline.json')
+    print('Compiled pipeline to titanic_pipeline.json')
 
     from google.cloud import aiplatform
     aiplatform.init(project=PROJECT_ID, location=REGION)
-    job = aiplatform.PipelineJob(
-        display_name='iris-custom-pipeline-run',
-        template_path='iris_pipeline.json',
-        pipeline_root=PIPELINE_ROOT,
-        parameter_values={'project': PROJECT_ID, 'location': REGION}
-    )
+    job = aiplatform.PipelineJob(display_name='titanic-automl-pipeline-run',
+                                 template_path='titanic_pipeline.json',
+                                 pipeline_root=PIPELINE_ROOT,
+                                 parameter_values={'project': PROJECT_ID, 'location': REGION})
     job.run(sync=False)
     print('Submitted pipeline job (async).')
