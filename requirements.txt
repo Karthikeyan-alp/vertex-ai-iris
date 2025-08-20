@@ -5,3 +5,4 @@ click>=8.0,<9
 python-dotenv
 pandas
 scikit-learn
+fsspec
