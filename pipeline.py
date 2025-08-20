@@ -34,18 +34,35 @@ def train_automl(project: str, location: str, experiment: str, dataset_resource_
     from google.cloud import aiplatform
     aiplatform.init(project=project, location=location, experiment=experiment)
     ds = aiplatform.TabularDataset(dataset_resource_name)
-    aiplatform.log_params({'target_column': target_col, 'budget_mnh': budget_mnh})
-    job = aiplatform.AutoMLTabularTrainingJob(display_name=model_display_name + '-job', optimization_prediction_type='classification', optimization_objective='maximize-log-likelihood')
-    model = job.run(dataset=ds, target_column=target_col, model_display_name=model_display_name, budget_milli_node_hours=budget_mnh, sync=True)
-    try:
-        metrics = model.evaluate()
-        if isinstance(metrics, dict):
-            aiplatform.log_metrics(metrics)
-        else:
-            aiplatform.log_metrics({'eval': str(metrics)})
-    except Exception as e:
-        print('Eval logging skipped:', e)
+    
+    # Start experiment run
+    with aiplatform.start_run(run_name=model_display_name + '-run'):
+        aiplatform.log_params({'target_column': target_col, 'budget_mnh': budget_mnh})
+        
+        job = aiplatform.AutoMLTabularTrainingJob(
+            display_name=model_display_name + '-job',
+            optimization_prediction_type='classification',
+            optimization_objective='maximize-log-likelihood'
+        )
+        model = job.run(
+            dataset=ds,
+            target_column=target_col,
+            model_display_name=model_display_name,
+            budget_milli_node_hours=budget_mnh,
+            sync=True
+        )
+        
+        try:
+            metrics = model.evaluate()
+            if isinstance(metrics, dict):
+                aiplatform.log_metrics(metrics)
+            else:
+                aiplatform.log_metrics({'eval': str(metrics)})
+        except Exception as e:
+            print('Eval logging skipped:', e)
+        
     return model.resource_name
+
 
 @component(base_image=BASE_IMAGE, packages_to_install=PKGS)
 def deploy_model(project: str, location: str, model_resource_name: str, endpoint_display_name: str, machine_type: str = 'n1-standard-2') -> str:
