@@ -104,14 +104,129 @@
 #     print('Submitted pipeline job (async).')
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# import os
+# from dotenv import load_dotenv
+# load_dotenv()
+# from google.cloud import aiplatform
+# from kfp import dsl, compiler
+# from kfp.dsl import component
+
+# # -------------------- ENV --------------------
+# PROJECT_ID = os.getenv('PROJECT_ID')
+# REGION = os.getenv('REGION', 'us-central1')
+# BUCKET_NAME = os.getenv('BUCKET_NAME')
+# PIPELINE_ROOT = os.getenv('PIPELINE_ROOT', f'gs://{BUCKET_NAME}/pipeline_root')
+# GCS_CSV = os.getenv('DATA_PATH', 'data/iris.csv')
+# GCS_CSV_URI = f'gs://{BUCKET_NAME}/{GCS_CSV}'
+
+# BASE_IMAGE = 'python:3.10'
+# PKGS = [
+#     'pandas',
+#     'scikit-learn',
+#     'joblib',
+#     'gcsfs'   # Required so pandas can read gs:// paths
+# ]
+
+# # -------------------- Load Dataset --------------------
+# @component(base_image=BASE_IMAGE, packages_to_install=PKGS)
+# def load_dataset(gcs_uri: str) -> str:
+#     import pandas as pd
+#     df = pd.read_csv(gcs_uri)
+#     local_path = "/tmp/data.csv"
+#     df.to_csv(local_path, index=False)
+#     print(f"CSV loaded from {gcs_uri}, saved to {local_path}")
+#     return local_path
+
+# # -------------------- Train Model --------------------
+# @component(base_image=BASE_IMAGE, packages_to_install=PKGS)
+# def train_model(csv_path: str, target_col: str = "target") -> str:
+#     import pandas as pd
+#     from sklearn.ensemble import RandomForestClassifier
+#     import joblib
+
+#     df = pd.read_csv(csv_path)
+#     X = df.drop(columns=[target_col])
+#     y = df[target_col]
+
+#     clf = RandomForestClassifier(n_estimators=100, random_state=42)
+#     clf.fit(X, y)
+
+#     model_path = "/tmp/rf_model.joblib"
+#     joblib.dump(clf, model_path)
+#     print(f"Model trained and saved at {model_path}")
+#     return model_path
+
+# # -------------------- Deployment Placeholder --------------------
+# @component(base_image=BASE_IMAGE, packages_to_install=PKGS)
+# def deploy_model_placeholder(model_path: str) -> str:
+#     print(f"Model is ready for deployment at {model_path}")
+#     return model_path
+
+# # -------------------- Pipeline --------------------
+# @dsl.pipeline(name="iris-tabular-pipeline")
+# def iris_pipeline(
+#     project: str = PROJECT_ID,
+#     location: str = REGION,
+#     gcs_csv_uri: str = GCS_CSV_URI,
+#     target_column: str = "target"
+# ):
+#     csv_file = load_dataset(gcs_uri=gcs_csv_uri)
+#     model_file = train_model(csv_path=csv_file.output, target_col=target_column)
+#     _ = deploy_model_placeholder(model_path=model_file.output)
+
+# # -------------------- Main --------------------
+# if __name__ == "__main__":
+#     compiler.Compiler().compile(
+#         pipeline_func=iris_pipeline,
+#         package_path="iris_pipeline.json"
+#     )
+#     print("Compiled pipeline to iris_pipeline.json")
+
+#     aiplatform.init(project=PROJECT_ID, location=REGION, staging_bucket=BUCKET_NAME)
+
+#     pipeline_job = aiplatform.PipelineJob(
+#         display_name="iris-tabular-pipeline-job",
+#         template_path="iris_pipeline.json",
+#         pipeline_root=PIPELINE_ROOT,
+#         parameter_values={
+#             "project": PROJECT_ID,
+#             "location": REGION,
+#             "gcs_csv_uri": GCS_CSV_URI,
+#             "target_column": "target"
+#         },
+#     )
+#     pipeline_job.run()
+#     print("Pipeline submitted successfully!")
+
+
+
+
+
+
 import os
 from dotenv import load_dotenv
 load_dotenv()
-from google.cloud import aiplatform
-from kfp import dsl, compiler
-from kfp.dsl import component
 
-# -------------------- ENV --------------------
+# -------------------- Config --------------------
 PROJECT_ID = os.getenv('PROJECT_ID')
 REGION = os.getenv('REGION', 'us-central1')
 BUCKET_NAME = os.getenv('BUCKET_NAME')
@@ -119,81 +234,98 @@ PIPELINE_ROOT = os.getenv('PIPELINE_ROOT', f'gs://{BUCKET_NAME}/pipeline_root')
 GCS_CSV = os.getenv('DATA_PATH', 'data/iris.csv')
 GCS_CSV_URI = f'gs://{BUCKET_NAME}/{GCS_CSV}'
 
+from kfp import dsl, compiler
+from kfp.dsl import component
+
 BASE_IMAGE = 'python:3.10'
-PKGS = [
-    'pandas',
-    'scikit-learn',
-    'joblib',
-    'gcsfs'   # Required so pandas can read gs:// paths
-]
+PKGS = ['google-cloud-aiplatform==1.56.0', 'scikit-learn', 'pandas', 'joblib']
 
-# -------------------- Load Dataset --------------------
+# -------------------- Training Component --------------------
 @component(base_image=BASE_IMAGE, packages_to_install=PKGS)
-def load_dataset(gcs_uri: str) -> str:
+def train_sklearn_model(project: str, location: str, gcs_uri: str, target_col: str,
+                        model_display_name: str, model_output_dir: str = "/tmp/model") -> str:
     import pandas as pd
-    df = pd.read_csv(gcs_uri)
-    local_path = "/tmp/data.csv"
-    df.to_csv(local_path, index=False)
-    print(f"CSV loaded from {gcs_uri}, saved to {local_path}")
-    return local_path
-
-# -------------------- Train Model --------------------
-@component(base_image=BASE_IMAGE, packages_to_install=PKGS)
-def train_model(csv_path: str, target_col: str = "target") -> str:
-    import pandas as pd
-    from sklearn.ensemble import RandomForestClassifier
     import joblib
+    from google.cloud import aiplatform
+    from sklearn.model_selection import train_test_split
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.metrics import accuracy_score
+    import os
 
-    df = pd.read_csv(csv_path)
+    # Load dataset from GCS
+    df = pd.read_csv(gcs_uri)
     X = df.drop(columns=[target_col])
     y = df[target_col]
 
+    # Train/test split
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    # Train sklearn model
     clf = RandomForestClassifier(n_estimators=100, random_state=42)
-    clf.fit(X, y)
+    clf.fit(X_train, y_train)
 
-    model_path = "/tmp/rf_model.joblib"
+    # Evaluate
+    preds = clf.predict(X_test)
+    acc = accuracy_score(y_test, preds)
+    print("Accuracy:", acc)
+
+    # Save model
+    os.makedirs(model_output_dir, exist_ok=True)
+    model_path = os.path.join(model_output_dir, "model.joblib")
     joblib.dump(clf, model_path)
-    print(f"Model trained and saved at {model_path}")
-    return model_path
 
-# -------------------- Deployment Placeholder --------------------
+    # Upload to Vertex AI Model Registry
+    aiplatform.init(project=project, location=location)
+    model = aiplatform.Model.upload(
+        display_name=model_display_name,
+        artifact_uri=model_output_dir,
+        serving_container_image_uri="us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-3:latest",
+    )
+    return model.resource_name
+
+# -------------------- Deployment Component --------------------
 @component(base_image=BASE_IMAGE, packages_to_install=PKGS)
-def deploy_model_placeholder(model_path: str) -> str:
-    print(f"Model is ready for deployment at {model_path}")
-    return model_path
+def deploy_model(project: str, location: str, model_resource_name: str, endpoint_display_name: str,
+                 machine_type: str = 'n1-standard-2') -> str:
+    from google.cloud import aiplatform
+    aiplatform.init(project=project, location=location)
+    model = aiplatform.Model(model_resource_name)
+    endpoint = model.deploy(
+        deployed_model_display_name=endpoint_display_name,
+        machine_type=machine_type,
+        min_replica_count=1,
+        max_replica_count=1
+    )
+    print('Deployed endpoint', endpoint.resource_name)
+    return endpoint.resource_name
 
 # -------------------- Pipeline --------------------
-@dsl.pipeline(name="iris-tabular-pipeline")
-def iris_pipeline(
-    project: str = PROJECT_ID,
-    location: str = REGION,
-    gcs_csv_uri: str = GCS_CSV_URI,
-    target_column: str = "target"
-):
-    csv_file = load_dataset(gcs_uri=gcs_csv_uri)
-    model_file = train_model(csv_path=csv_file.output, target_col=target_column)
-    _ = deploy_model_placeholder(model_path=model_file.output)
+@dsl.pipeline(name='iris-custom-pipeline')
+def iris_pipeline(project: str = PROJECT_ID, location: str = REGION,
+                  gcs_csv_uri: str = GCS_CSV_URI, target_column: str = 'target',
+                  model_display_name: str = 'iris-sklearn-model',
+                  endpoint_display_name: str = 'iris-endpoint'):
+
+    model = train_sklearn_model(project=project, location=location,
+                                gcs_uri=gcs_csv_uri, target_col=target_column,
+                                model_display_name=model_display_name)
+
+    _ = deploy_model(project=project, location=location,
+                     model_resource_name=model.output,
+                     endpoint_display_name=endpoint_display_name)
 
 # -------------------- Main --------------------
-if __name__ == "__main__":
-    compiler.Compiler().compile(
-        pipeline_func=iris_pipeline,
-        package_path="iris_pipeline.json"
-    )
-    print("Compiled pipeline to iris_pipeline.json")
+if __name__ == '__main__':
+    compiler.Compiler().compile(pipeline_func=iris_pipeline, package_path='iris_pipeline.json')
+    print('Compiled pipeline to iris_pipeline.json')
 
-    aiplatform.init(project=PROJECT_ID, location=REGION, staging_bucket=BUCKET_NAME)
-
-    pipeline_job = aiplatform.PipelineJob(
-        display_name="iris-tabular-pipeline-job",
-        template_path="iris_pipeline.json",
+    from google.cloud import aiplatform
+    aiplatform.init(project=PROJECT_ID, location=REGION)
+    job = aiplatform.PipelineJob(
+        display_name='iris-custom-pipeline-run',
+        template_path='iris_pipeline.json',
         pipeline_root=PIPELINE_ROOT,
-        parameter_values={
-            "project": PROJECT_ID,
-            "location": REGION,
-            "gcs_csv_uri": GCS_CSV_URI,
-            "target_column": "target"
-        },
+        parameter_values={'project': PROJECT_ID, 'location': REGION}
     )
-    pipeline_job.run()
-    print("Pipeline submitted successfully!")
+    job.run(sync=False)
+    print('Submitted pipeline job (async).')
