@@ -79,7 +79,7 @@ def deploy_model(project: str, location: str, model_resource_name: str, endpoint
 def iris_pipeline(project: str = PROJECT_ID, location: str = REGION,
                   dataset_display_name: str = 'iris-dataset', gcs_csv_uri: str = GCS_CSV_URI,
                   target_column: str = 'target', model_display_name: str = 'iris-automl-model',
-                  endpoint_display_name: str = 'iris-endpoint', budget_mnh: int = 200):
+                  endpoint_display_name: str = 'iris-endpoint', budget_mnh: int = 1000):
 
     ds = ensure_tabular_dataset(project=project, location=location,
                                 display_name=dataset_display_name, gcs_uri=gcs_csv_uri)
