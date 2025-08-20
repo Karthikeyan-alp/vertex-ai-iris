@@ -109,6 +109,8 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
+#added
+
 PROJECT_ID = os.getenv('PROJECT_ID')
 REGION = os.getenv('REGION', 'us-central1')
 BUCKET_NAME = os.getenv('BUCKET_NAME')
