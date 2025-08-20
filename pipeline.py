@@ -57,7 +57,7 @@ def deploy_model(project: str, location: str, model_resource_name: str, endpoint
     return endpoint.resource_name
 
 @dsl.pipeline(name='iris-automl-pipeline')
-def iris_pipeline(project: str = PROJECT_ID, location: str = REGION, experiment: str = EXPERIMENT_NAME, dataset_display_name: str = 'iris-dataset', gcs_csv_uri: str = GCS_CSV_URI, target_column: str = 'target', model_display_name: str = 'iris-automl-model', endpoint_display_name: str = 'iris-endpoint', budget_mnh: int = 100):
+def iris_pipeline(project: str = PROJECT_ID, location: str = REGION, experiment: str = EXPERIMENT_NAME, dataset_display_name: str = 'iris-dataset', gcs_csv_uri: str = GCS_CSV_URI, target_column: str = 'target', model_display_name: str = 'iris-automl-model', endpoint_display_name: str = 'iris-endpoint', budget_mnh: int = 150):
     ds = ensure_tabular_dataset(project=project, location=location, display_name=dataset_display_name, gcs_uri=gcs_csv_uri)
     model = train_automl(project=project, location=location, experiment=experiment, dataset_resource_name=ds.output, target_col=target_column, model_display_name=model_display_name, budget_mnh=budget_mnh)
     _ = deploy_model(project=project, location=location, model_resource_name=model.output, endpoint_display_name=endpoint_display_name)
