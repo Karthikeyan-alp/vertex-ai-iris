@@ -108,7 +108,7 @@
 import os
 from dotenv import load_dotenv
 load_dotenv()
-
+from google.cloud import aiplatform
 #added
 
 PROJECT_ID = os.getenv('PROJECT_ID')
@@ -205,5 +205,25 @@ def iris_pipeline(project: str = PROJECT_ID, location: str = REGION,
 
 # -------------------- Main --------------------
 if __name__ == '__main__':
+    # Compile pipeline
     compiler.Compiler().compile(pipeline_func=iris_pipeline, package_path='iris_pipeline.json')
     print('Compiled pipeline to iris_pipeline.json')
+
+    # Initialize AI Platform
+    aiplatform.init(project=PROJECT_ID, location=REGION, staging_bucket=BUCKET_NAME)
+
+    # Submit pipeline
+    pipeline_job = aiplatform.PipelineJob(
+        display_name="iris-tabular-pipeline-job",
+        template_path="iris_pipeline.json",
+        pipeline_root=PIPELINE_ROOT,
+        parameter_values={
+            "project": PROJECT_ID,
+            "location": REGION,
+            "dataset_display_name": "iris-dataset",
+            "gcs_csv_uri": GCS_CSV_URI,
+            "target_column": "target"
+        },
+    )
+    pipeline_job.run()
+    print("Pipeline submitted successfully!")
